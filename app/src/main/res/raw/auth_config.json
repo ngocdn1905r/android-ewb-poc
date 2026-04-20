@@ -1,0 +1,7 @@
+{
+  "issuer": "http://10.10.11.0:8080/realms/poc-realm",
+  "clientID": "mobile-poc",
+  "redirectUri": "com.example.androidpoc://callback",
+  "postLogoutRedirectUri": "myapp://logout",
+  "scope": "openid profile"
+}
