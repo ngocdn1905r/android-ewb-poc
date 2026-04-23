@@ -6,10 +6,16 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.androidpoc.ResponseMapper.asResult
+import com.auth0.android.jwt.JWT
+import com.example.androidpoc.ext.ResponseMapper.asResult
+import com.example.androidpoc.ext.KEYCLOAK_PORT
+import com.example.androidpoc.ext.LOCAL_ADDRESS
+import com.example.androidpoc.data.UserRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,16 +45,17 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
+        private const val TAG = "MainViewModel"
         private const val BASE_URL =
-            "http://192.168.1.143:8080/realms/poc-realm/protocol/openid-connect"
+            "${LOCAL_ADDRESS}:${KEYCLOAK_PORT}/realms/poc-realm/protocol/openid-connect"
 
         private const val REGISTRATION_URL =
-            "http://192.168.1.143:8080/realms/poc-realm/clients-registrations/openid-connect"
+            "${LOCAL_ADDRESS}:${KEYCLOAK_PORT}/realms/poc-realm/clients-registrations/openid-connect"
         private const val CLIENT_ID = "mobile-poc"
         private const val REDIRECT_URI = "com.example.androidpoc.auth://callback"
 
         private const val END_SESSION_URI = "com.example.androidpoc.auth://logout"
-        private const val SCOPES = "openid profile offline_access"
+        private const val SCOPES = "openid profile roles offline_access"
     }
 
     private val _uiState: MutableStateFlow<MainUiState> = MutableStateFlow(MainUiState())
@@ -59,6 +66,12 @@ class MainViewModel @Inject constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val effect = _effect.asSharedFlow()
+
+    private var _retryCount = 0
+
+    init {
+        checkUserState()
+    }
 
     fun onEvent(event: MainEvent) {
         when (event) {
@@ -92,19 +105,13 @@ class MainViewModel @Inject constructor(
     }
 
     private fun requestLogout(context: Context) {
-
-        viewModelScope.launch {
-            val token = userRepository.userToken.firstOrNull()
-            Log.e("HOME", "USER TOKEN = $token")
+        _uiState.value.idToken?.let { idToken ->
+            val authService = getAuthService(context)
+            val endSessionRequest = getEndSessionRequest(idToken)
+            val logoutIntent =
+                authService.getEndSessionRequestIntent(endSessionRequest)
+            launchEffect(MainEffect.LaunchLogout(logoutIntent))
         }
-
-//        _uiState.value.idToken?.let { idToken ->
-//            val authService = getAuthService(context)
-//            val endSessionRequest = getEndSessionRequest(idToken)
-//            val logoutIntent =
-//                authService.getEndSessionRequestIntent(endSessionRequest)
-//            launchEffect(MainEffect.LaunchLogout(logoutIntent))
-//        }
     }
 
     private fun exchangeToken(context: Context, authResponse: AuthorizationResponse?) {
@@ -112,25 +119,44 @@ class MainViewModel @Inject constructor(
             launchEffect(MainEffect.LoginFailure)
         } else {
             val tokenExchangeRequest = authResponse.createTokenExchangeRequest()
-            Log.e("HOME", "tokenExchangeRequest $authResponse")
+            Log.d(TAG, "tokenExchangeRequest $authResponse")
 
             val authService = getAuthService(context)
 
             authService.performTokenRequest(tokenExchangeRequest) { tokenResponse, exception ->
-                Log.e("HOME", "token response ${tokenResponse} - $exception")
+                Log.d(TAG, "token response $tokenResponse - $exception")
                 if (tokenResponse != null) {
-                    Log.d("MAIN", "token = ${tokenResponse.accessToken}")
+                    Log.d(TAG, "token = ${tokenResponse.accessToken}")
 
                     _uiState.value = _uiState.value.copy(
                         userToken = tokenResponse.accessToken,
-                        idToken = tokenResponse.idToken
+                        idToken = tokenResponse.idToken,
+                        screenType = ScreenType.WELCOME
                     )
+
+                    tokenResponse.idToken?.let { idToken ->
+                        val role = JWT(idToken).getClaim("roles").asList(String::class.java)
+                        val customRoles =
+                            JWT(idToken).getClaim("custom_roles").asList(String::class.java)
+                        Log.d(TAG, "user roles => $role - $customRoles")
+                    }
+
+                    tokenResponse.accessToken?.let { idToken ->
+                        val role = JWT(idToken).getClaim("roles").asList(String::class.java)
+                        val customRoles =
+                            JWT(idToken).getClaim("custom_roles").asList(String::class.java)
+                        Log.e(TAG, "user roles => $role - $customRoles")
+                    }
+
+                    getUserInfo()
 
                     saveToLocalStorage(
                         tokenResponse.accessToken,
                         tokenResponse.idToken,
                         tokenResponse.refreshToken
                     )
+
+                    launchEffect(MainEffect.LoginSuccess)
 
                 } else {
                     launchEffect(MainEffect.LoginFailure)
@@ -139,7 +165,7 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    private fun refreshToken(context: Context) {
+    private fun refreshToken(context: Context, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             userRepository.refreshToken.firstOrNull()?.let { refreshToken ->
                 val serviceConfig = getServiceConfig()
@@ -150,9 +176,9 @@ class MainViewModel @Inject constructor(
                 val authService = getAuthService(context)
 
                 authService.performTokenRequest(tokenRequest) { tokenResponse, exception ->
-                    Log.e("HOME", "token response ${tokenResponse} - $exception")
+                    Log.d(TAG, "token response ${tokenResponse} - $exception")
                     if (tokenResponse != null) {
-                        Log.d("MAIN", "refresh token = ${tokenResponse.refreshToken}")
+                        Log.d(TAG, "refresh token = ${tokenResponse.refreshToken}")
 
                         _uiState.value = _uiState.value.copy(
                             userToken = tokenResponse.accessToken,
@@ -163,8 +189,14 @@ class MainViewModel @Inject constructor(
                             tokenResponse.idToken,
                             tokenResponse.refreshToken
                         )
+                        onComplete.invoke()
                     } else if (null != exception) {
                         launchEffect(MainEffect.RefreshTokenFailure)
+                        clearLocalStorage()
+                        viewModelScope.launch {
+                            delay(2000)
+                            launchEffect(MainEffect.LogoutSuccess)
+                        }
                     }
                 }
             }
@@ -172,10 +204,14 @@ class MainViewModel @Inject constructor(
     }
 
     private fun logoutSuccess() {
+        clearLocalStorage()
         _uiState.value = _uiState.value.copy(
             userToken = null,
-            idToken = null
+            idToken = null,
+            userType = null,
+            screenType = ScreenType.LOGIN
         )
+        launchEffect(MainEffect.LogoutSuccess)
     }
 
     private fun getAuthService(context: Context): AuthorizationService {
@@ -231,15 +267,89 @@ class MainViewModel @Inject constructor(
     }
 
     private fun callHello() {
-        userRepository.callHello().asResult()
-            .onEach { result ->
-                result.onSuccess {
-                    Log.e("HOME", "response success")
+        uiState.value.userToken?.let { token ->
+            userRepository.callHello(token).asResult()
+                .onEach { result ->
+                    result.onSuccess { data ->
+                        Log.d(TAG, "response success $data")
+                        _uiState.value = _uiState.value.copy(
+                            response = data.toString()
+                        )
+                    }
+                    result.onFailure { exception ->
+                        Log.e(TAG, "exception $exception")
+                        if (exception is ClientRequestException) {
+                            if (exception.response.status.value == 401) {
+                                refreshToken(context, onComplete = {
+                                    _retryCount++
+                                    if (_retryCount > 1) {
+                                        launchEffect(MainEffect.ForceLogout)
+                                    } else {
+                                        Log.e(TAG, "retry call hello")
+                                        callHello()
+                                    }
+                                })
+                            } else {
+                                launchEffect(MainEffect.ForceLogout)
+                            }
+                        } else {
+                            launchEffect(MainEffect.ForceLogout)
+                        }
+                    }
+                }.launchIn(viewModelScope)
+        }
+
+    }
+
+    private fun getUserInfo() {
+        uiState.value.userToken?.let { token ->
+            userRepository.getUserInfo(token).asResult()
+                .onEach { result ->
+                    result.onSuccess { data ->
+                        Log.d(TAG, "response success $result")
+                        val userType = if (data.access.roles?.contains("mobile-user") == true) {
+                            "PREMIUM"
+                        } else {
+                            "FREE"
+                        }
+                        _uiState.value = _uiState.value.copy(
+                            userType = userType
+                        )
+
+                    }
+                    result.onFailure { exception ->
+                        Log.e(TAG, "exception $exception")
+                    }
                 }
-                result.onFailure {
-                    Log.e("HOME", "exception $it")
-                }
+                .launchIn(viewModelScope)
+        }
+    }
+
+    private fun checkUserState() {
+        viewModelScope.launch {
+            val userToken = userRepository.userToken.firstOrNull()
+            val idToken = userRepository.idToken.firstOrNull()
+            if (null == userToken) {
+                _uiState.value = _uiState.value.copy(
+                    screenType = ScreenType.LOGIN,
+                    userToken = null,
+                    idToken = null,
+                    userType = null
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    screenType = ScreenType.WELCOME,
+                    userToken = userToken,
+                    idToken = idToken,
+                )
+                getUserInfo()
             }
-            .launchIn(viewModelScope)
+        }
+    }
+
+    private fun clearLocalStorage() {
+        viewModelScope.launch {
+            userRepository.clear()
+        }
     }
 }

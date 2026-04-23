@@ -23,15 +23,11 @@ sealed interface MainEvent {
 
 
 sealed interface MainEffect {
-
     data class LaunchLogin(val intent: Intent) : MainEffect
     data object LoginSuccess : MainEffect
-
     data object LoginFailure : MainEffect
-
     data class LaunchLogout(val intent: Intent) : MainEffect
-
     data object LogoutSuccess : MainEffect
-
+    data object ForceLogout : MainEffect
     data object RefreshTokenFailure : MainEffect
 }

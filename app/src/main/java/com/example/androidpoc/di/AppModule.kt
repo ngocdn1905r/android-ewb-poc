@@ -1,8 +1,10 @@
-package com.example.androidpoc
+package com.example.androidpoc.di
 
 import android.content.Context
 import android.util.Log
 import com.chuckerteam.chucker.api.ChuckerInterceptor
+import com.example.androidpoc.ext.LOCAL_ADDRESS
+import com.example.androidpoc.ext.SPRING_PORT
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -21,12 +23,9 @@ import io.ktor.client.request.header
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.Json
 import okhttp3.Dispatcher
 import java.util.concurrent.TimeUnit
-import javax.inject.Named
 import javax.inject.Singleton
 
 const val DEFAULT_KTOR_CLIENT = "DEFAULT_KTOR_CLIENT"
@@ -48,7 +47,7 @@ object AppModule {
         configureEngine(context, true)
         configureLogging(enableHttpLogging = true)
         configureContentNegotiation()
-        configureDefaultRequest("http://192.168.1.143:8081")
+        configureDefaultRequest("${LOCAL_ADDRESS}:${SPRING_PORT}")
     }
 
     fun HttpClientConfig<OkHttpConfig>.configureEngine(

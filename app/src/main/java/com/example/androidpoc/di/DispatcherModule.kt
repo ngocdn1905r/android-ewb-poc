@@ -1,4 +1,4 @@
-package com.example.androidpoc
+package com.example.androidpoc.di
 
 import dagger.Module
 import dagger.Provides

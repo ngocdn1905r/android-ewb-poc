@@ -1,16 +1,21 @@
-package com.example.androidpoc
+package com.example.androidpoc.data
 
 import android.content.Context
 import androidx.datastore.dataStore
+import com.example.androidpoc.di.AppDispatchers
+import com.example.androidpoc.di.Dispatcher
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
-import com.example.androidpoc.ResponseMapper.safeApiCall
+import com.example.androidpoc.ext.ResponseMapper.safeApiCall
+import com.example.androidpoc.ext.KEYCLOAK_PORT
+import com.example.androidpoc.ext.LOCAL_ADDRESS
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import kotlinx.coroutines.flow.flowOn
 
 private val Context.dataStore by dataStore(
@@ -43,8 +48,26 @@ class UserRepository @Inject constructor(
         }
     }
 
-    fun callHello() = safeApiCall {
-        client.get(UserService.HELLO) {}.body<HelloResponseModel>()
+    suspend fun clear() {
+        context.dataStore.updateData { preferences ->
+            preferences.copy(
+                token = null,
+                idToken = null,
+                refreshToken = null
+            )
+        }
+    }
+
+    fun callHello(token: String) = safeApiCall {
+        client.get(UserService.HELLO) {
+            header("Authorization", "Bearer $token")
+        }.body<HelloResponseModel>()
+    }.flowOn(ioDispatcher)
+
+    fun getUserInfo(token: String) = safeApiCall {
+        client.get("${LOCAL_ADDRESS}:${KEYCLOAK_PORT}/realms/poc-realm/protocol/openid-connect/userinfo") {
+            header("Authorization", "Bearer $token")
+        }.body<UserInfoResponse>()
     }.flowOn(ioDispatcher)
 
 }

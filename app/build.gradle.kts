@@ -67,6 +67,8 @@ dependencies {
     implementation(libs.ktor.client.negotiation)
     implementation(libs.ktor.client.auth)
 
+    implementation(libs.jwtdecode)
+
     debugImplementation("com.github.chuckerteam.chucker:library:4.0.0")
     debugImplementation("com.google.code.gson:gson:2.11.0")
 

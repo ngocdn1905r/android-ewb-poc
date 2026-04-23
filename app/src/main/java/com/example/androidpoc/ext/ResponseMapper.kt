@@ -1,4 +1,4 @@
-package com.example.androidpoc
+package com.example.androidpoc.ext
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
